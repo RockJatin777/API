@@ -291,3 +291,251 @@ app.delete("/todos/:todoId/", async (request, response) => {
   response.send("Todo Deleted");
 });
 
+
+// new APIs
+// Last APIs
+// authenticationToken APIs
+
+
+const express = require("express");
+const app = express();
+
+app.use(express.json());
+
+const { open } = require("sqlite");
+const sqlite3 = require("sqlite3");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
+
+const path = require("path");
+
+dbPath = path.join(__dirname, "covid19IndiaPortal.db");
+
+let db = null;
+
+const initializeAndServer = async () => {
+  try {
+    db = await open({
+      filename: dbPath,
+      driver: sqlite3.Database,
+    });
+    app.listen(6000, () => {
+      console.log("http://localhost/6000");
+    });
+  } catch (e) {
+    console.log(`Db error ${e.message}`);
+    process.exit(1);
+  }
+};
+
+initializeAndServer();
+
+const convertDbObjectToResponseObject = (dbObject) => {
+  return {
+    stateId: dbObject.state_id,
+    stateName: dbObject.state_name,
+    population: dbObject.population,
+  };
+};
+
+const convertDistrictDbObjectToResponseObject = (dbObject) => {
+  return {
+    districtId: dbObject.district_id,
+    districtName: dbObject.district_name,
+    stateId: dbObject.state_id,
+    cases: dbObject.cases,
+    cured: dbObject.cured,
+    active: dbObject.active,
+    deaths: dbObject.deaths,
+  };
+};
+
+const authenticationToken = (request, response, next) => {
+  let jwtToken;
+  const authHeader = request.headers["authorization"];
+  if (authHeader !== undefined) {
+    jwtToken = authHeader.split(" ")[1];
+  }
+  if (jwtToken === undefined) {
+    response.status(401);
+    response.send("Invalid JWT Token");
+  } else {
+    jwt.verify(jwtToken, "TOKEN", async (error, payload) => {
+      if (error) {
+        response.status(401);
+        response.send("Invalid JWT Token");
+      } else {
+        next();
+      }
+    });
+  }
+};
+
+app.post("/login/", async (request, response) => {
+  const { username, password } = request.body;
+
+  const userQuery = `SELECT * FROM user WHERE username = '${username}';`;
+  const dbUser = await db.get(userQuery);
+  if (dbUser === undefined) {
+    response.status(400);
+    response.send("Invalid user");
+  } else {
+    const isPasswordMatched = await bcrypt.compare(password, dbUser.password);
+    if (isPasswordMatched === true) {
+      const payload = { username: username };
+      const jwtToken = jwt.sign(payload, "TOKEN");
+      response.send({ jwtToken });
+    } else {
+      response.status(400);
+      response.send("Invalid password");
+    }
+  }
+});
+
+// get API
+
+app.get("/states/", authenticationToken, async (request, response) => {
+  const getStatesQuery = `
+    SELECT *
+    FROM state;`;
+
+  const stateArray = await db.all(getStatesQuery);
+  response.send(
+    stateArray.map((eachState) => convertDbObjectToResponseObject(eachState))
+  );
+});
+
+// get specific state API
+
+app.get("/states/:stateId/", authenticationToken, async (request, response) => {
+  const { stateId } = request.params;
+  const getStatesQuery = `
+    SELECT *
+    FROM state
+    WHERE state_id = ${stateId};`;
+
+  const stateArray = await db.get(getStatesQuery);
+  response.send(convertDbObjectToResponseObject(stateArray));
+});
+
+// get district APi
+
+app.get("/districts/", authenticationToken, async (request, response) => {
+  const getStatesQuery = `
+    SELECT *
+    FROM district;`;
+
+  const stateArray = await db.all(getStatesQuery);
+  response.send(
+    stateArray.map((eachState) =>
+      convertDistrictDbObjectToResponseObject(eachState)
+    )
+  );
+});
+
+// get specific district API
+
+app.get(
+  "/districts/:districtId/",
+  authenticationToken,
+  async (request, response) => {
+    const { districtId } = request.params;
+    const getStatesQuery = `
+    SELECT *
+    FROM district
+    WHERE district_id = ${districtId};`;
+
+    const stateArray = await db.get(getStatesQuery);
+    response.send(convertDistrictDbObjectToResponseObject(stateArray));
+  }
+);
+
+// delete API
+
+app.delete(
+  "/districts/:districtId/",
+  authenticationToken,
+  async (request, response) => {
+    const { districtId } = request.params;
+    const getStatesQuery = `
+    DELETE
+    FROM district
+    WHERE district_id = ${districtId};`;
+
+    await db.run(getStatesQuery);
+    response.send("District Removed");
+  }
+);
+
+// update API
+
+app.put(
+  "/districts/:districtId/",
+  authenticationToken,
+  async (request, response) => {
+    const {
+      districtName,
+      stateId,
+      cases,
+      cured,
+      active,
+      deaths,
+    } = request.body;
+    const { districtId } = request.params;
+    const updateQuery = `
+    UPDATE district 
+    SET 
+      district_name = "${districtName}",
+      state_id = ${stateId},
+      cases = ${cases},
+      cured = ${cured},
+      active = ${active},
+      deaths = ${deaths}
+    WHERE
+      district_id = ${districtId};`;
+    await db.run(updateQuery);
+    response.send("District Details Updated");
+  }
+);
+
+// post district API
+
+app.post("/districts/", authenticationToken, async (request, response) => {
+  const { districtName, stateId, cases, cured, active, deaths } = request.body;
+  const updateQuery = `
+    INSERT INTO
+      district (district_name, state_id, cases, cured, active, deaths)
+    VALUES(
+      "${districtName}",
+      ${stateId},
+      ${cases},
+      ${cured},
+      ${active},
+      ${deaths} 
+      );`;
+  const array = await db.run(updateQuery);
+  const districtId = array.lastID;
+  response.send("District Successfully Added");
+});
+
+// stats query
+
+app.get(
+  "/states/:stateId/stats/",
+  authenticationToken,
+  async (request, response) => {
+    const { stateId } = request.params;
+    const getStatesQuery = `
+    SELECT 
+      sum(cases) AS totalCases,
+      sum(cured) AS totalCured,
+      sum(active) AS totalActive,
+      sum(deaths) AS totalDeaths
+    FROM state
+    NATURAL JOIN district
+    WHERE state.state_id = ${stateId};`;
+
+    const stateArray = await db.all(getStatesQuery);
+    response.send(stateArray);
+  }
+);
